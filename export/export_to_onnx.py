@@ -64,8 +64,9 @@ class FactionDialogueONNXExporter:
         os.makedirs(output_dir, exist_ok=True)
         
         # Define export paths
-        base_onnx_path = os.path.join(output_dir, "faction_dialogue_model.onnx")
-        optimized_onnx_path = os.path.join(output_dir, "faction_dialogue_model_optimized.onnx")
+        base_onnx_path = os.path.join(output_dir, "fd_model.onnx")
+        optimized_onnx_path = os.path.join(output_dir, "fd_model_optimized.onnx")
+        final_onnx_path = os.path.join(output_dir, "faction_dialogue_model.onnx")
         
         # Step 1: Export base ONNX model
         print("📦 Step 1: Exporting base ONNX model...")
@@ -75,13 +76,17 @@ class FactionDialogueONNXExporter:
         if optimize:
             print("⚡ Step 2: Optimizing ONNX model...")
             self._optimize_onnx(base_onnx_path, optimized_onnx_path)
+
+        # Step 3: Preprocess ONNX model for quantization
+        print("⚡ Step 3: Preprocess ONNX model...")
+        self._preprocess_onnx(optimized_onnx_path, final_onnx_path)
         
-        # Step 3: Validate ONNX models
-        print("🧪 Step 3: Validating ONNX models...")
-        self._validate_onnx_export(base_onnx_path, optimized_onnx_path if optimize else None)
+        # Step 4: Validate ONNX models
+        print("🧪 Step 4: Validating ONNX models...")
+        self._validate_onnx_export(base_onnx_path, final_onnx_path if optimize else None)
         
-        # Step 4: Create integration files
-        print("📋 Step 4: Creating C++ integration files...")
+        # Step 5: Create integration files
+        print("📋 Step 5: Creating C++ integration files...")
         self._create_integration_files(output_dir)
         
         print("✅ ONNX EXPORT COMPLETED SUCCESSFULLY!")
@@ -139,7 +144,7 @@ class FactionDialogueONNXExporter:
         """Optimize ONNX model for inference"""
         
         try:
-            from onnxruntime.tools import optimizer
+            from onnxruntime.transformers import optimizer
             
             # Load the ONNX model
             model = onnx.load(input_path)
@@ -176,6 +181,26 @@ class FactionDialogueONNXExporter:
             import shutil
             shutil.copy2(input_path, output_path)
     
+    def _preprocess_onnx(self, input_path: str, output_path: str):
+        """Preprocess ONNX model for quantization"""
+        try:
+            from onnxruntime.quantization.shape_inference import quant_pre_process
+
+            quant_pre_process(
+                input_path,
+                output_path
+            )
+
+            print(f"   ✅ Model pre-processed and saved to {output_path}")
+
+        except Exception as e:
+            print(f"   ⚠️ Preprocess failed: {e}")
+            print("   📋 Using base model as optimized version...")
+            import shutil
+            shutil.copy2(input_path, output_path)
+            os.remove(input_path)
+
+        
     def _validate_onnx_export(self, base_path: str, optimized_path: str = None):
         """Validate ONNX model exports"""
         
@@ -246,200 +271,194 @@ class FactionDialogueONNXExporter:
             print(f"      ✅ Generation test passed")
         else:
             print(f"      ⚠️ Generation test marginal")
-    
-    def _create_integration_files(self, output_dir: str):
-        """Create files needed for C++ integration"""
+
+
+    def _create_optimized_structure(self, model_dir: str = "models/onnx"):
+        """Create optimized structure: shared model + faction configs"""
+        import shutil
         
-        # Create tokenizer vocabulary file
-        vocab_path = os.path.join(output_dir, "tokenizer_vocab.json")
+        print("🔄 CREATING OPTIMIZED EXPORT STRUCTURE")
+        print("="*50)
+        
+        original_model_path = os.path.join(model_dir, "fd_model.onnx")
+        base_model_path = os.path.join(model_dir, "faction_dialogue_model.onnx")
+        
+        if not os.path.exists(base_model_path):
+            print(f"❌ Base model not found: {base_model_path}")
+            return False
+        
+        # Option A: Single shared model structure
+        shared_dir = os.path.join(model_dir, "shared_optimized")
+        os.makedirs(shared_dir, exist_ok=True)
+        
+        # Copy base model once
+        shared_model_path = os.path.join(shared_dir, "dialogue.onnx")
+        shutil.copy2(base_model_path, shared_model_path)
+
+        os.remove(base_model_path)
+        os.remove(original_model_path)
+        
+        model_size = os.path.getsize(shared_model_path) / (1024 * 1024)
+        print(f"✅ Shared model: dialogue.onnx ({model_size:.1f} MB)")
+        
+        # Create faction configurations
+        factions = {
+            "ashvattha": {
+                "name": "Ashvattha Collective",
+                "ideology": "Ancient wisdom preservationists",
+                "prompt_template": "[ASHVATTHA] Player: {player_input} Assistant:",
+                "personality_traits": ["reverent", "traditional", "ancient_wisdom"],
+                "key_vocabulary": ["sacred", "ancient", "eternal", "dharma", "wisdom"]
+            },
+            "vaikuntha": {
+                "name": "Vaikuntha Initiative", 
+                "ideology": "Algorithmic karma governance",
+                "prompt_template": "[VAIKUNTHA] Player: {player_input} Assistant:",
+                "personality_traits": ["analytical", "systematic", "optimizing"],
+                "key_vocabulary": ["optimal", "calculated", "systematic", "data", "analysis"]
+            },
+            "yuga_striders": {
+                "name": "Yuga Striders",
+                "ideology": "Revolutionary chaos agents", 
+                "prompt_template": "[YUGA_STRIDERS] Player: {player_input} Assistant:",
+                "personality_traits": ["rebellious", "liberating", "destructive"],
+                "key_vocabulary": ["liberation", "freedom", "revolution", "break", "chains"]
+            },
+            "shroud_mantra": {
+                "name": "Shroud of Mantra",
+                "ideology": "Reality manipulation masters",
+                "prompt_template": "[SHROUD_MANTRA] Player: {player_input} Assistant:",
+                "personality_traits": ["mysterious", "reality_questioning", "narrative_focused"],
+                "key_vocabulary": ["narrative", "story", "perspective", "reality", "interpretation"]
+            }
+        }
+        
+        # Create faction config files
+        for faction_id, faction_data in factions.items():
+            faction_config_path = os.path.join(shared_dir, f"{faction_id}_config.json")
+            
+            with open(faction_config_path, 'w') as f:
+                json.dump(faction_data, f, indent=2)
+            
+            print(f"✅ {faction_id}_config.json")
+        
+        # Create tokenizer files (shared)
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        
+        # Shared tokenizer files
+        vocab_path = os.path.join(shared_dir, "tokenizer_vocab.json")
         with open(vocab_path, 'w', encoding='utf-8') as f:
-            json.dump(self.tokenizer.get_vocab(), f, indent=2)
+            json.dump(tokenizer.get_vocab(), f, indent=2)
         
-        print(f"   📄 Tokenizer vocabulary saved: {vocab_path}")
-        
-        # Create special tokens mapping
-        special_tokens_path = os.path.join(output_dir, "special_tokens.json")
+        special_tokens_path = os.path.join(shared_dir, "special_tokens.json")
         special_tokens = {
-            'pad_token': self.tokenizer.pad_token,
-            'eos_token': self.tokenizer.eos_token,
-            'bos_token': getattr(self.tokenizer, 'bos_token', None),
-            'unk_token': getattr(self.tokenizer, 'unk_token', None),
-            'pad_token_id': self.tokenizer.pad_token_id,
-            'eos_token_id': self.tokenizer.eos_token_id,
-            'vocab_size': len(self.tokenizer)
+            'pad_token': tokenizer.pad_token,
+            'eos_token': tokenizer.eos_token,
+            'pad_token_id': tokenizer.pad_token_id,
+            'eos_token_id': tokenizer.eos_token_id,
+            'vocab_size': len(tokenizer)
         }
         
         with open(special_tokens_path, 'w') as f:
             json.dump(special_tokens, f, indent=2)
         
-        print(f"   📄 Special tokens saved: {special_tokens_path}")
+        print(f"✅ tokenizer_vocab.json")
+        print(f"✅ special_tokens.json")
         
-        # Create faction mapping
-        faction_mapping_path = os.path.join(output_dir, "faction_mapping.json")
-        faction_mapping = {
-            'factions': ['ashvattha', 'vaikuntha', 'yuga_striders', 'shroud_mantra'],
-            'prompt_format': '[{FACTION}] Player: {player_input} Assistant:',
-            'max_input_length': 256,
-            'max_new_tokens': 80,
-            'generation_params': {
-                'temperature': 0.7,
-                'top_p': 0.9,
-                'repetition_penalty': 1.05
-            }
-        }
+        # Create integration guide
+        self._create_shared_integration_guide(shared_dir)
         
-        with open(faction_mapping_path, 'w') as f:
-            json.dump(faction_mapping, f, indent=2)
+        print(f"\n📊 STORAGE COMPARISON:")
+        print(f"❌ Current (copied): 4 × {model_size:.0f} MB = {model_size * 4:.0f} MB")
+        print(f"✅ Optimized (shared): 1 × {model_size:.0f} MB + configs = {model_size + 1:.0f} MB")
+        print(f"💾 Space saved: {(model_size * 3):.0f} MB ({75:.0f}% reduction)")
         
-        print(f"   📄 Faction mapping saved: {faction_mapping_path}")
-        
-        # Create C++ integration guide
-        cpp_guide_path = os.path.join(output_dir, "cpp_integration_guide.md")
-        cpp_guide = """# C++ Integration Guide for Faction Dialogue
+        return True
 
-## Files Overview
-- `faction_dialogue_model_optimized.onnx` - Main model file
-- `tokenizer_vocab.json` - Tokenizer vocabulary
-- `special_tokens.json` - Special token mappings
-- `faction_mapping.json` - Faction configuration
+    def _create_shared_integration_guide(self, output_dir: str):
+        """Create integration guide for shared model structure"""
+        
+        guide_path = os.path.join(output_dir, "integration_guide.md")
+        
+        guide_content = """# Angaraka AI - Optimized Shared Model Structure
 
-## ONNX Runtime Setup
+## Directory Structure
+```
+shared_optimized/
+├── dialogue.onnx              # Single shared model (600MB)
+├── ashvattha_config.json      # Faction configuration
+├── vaikuntha_config.json      # Faction configuration  
+├── yuga_striders_config.json  # Faction configuration
+├── shroud_mantra_config.json  # Faction configuration
+├── tokenizer_vocab.json       # Shared tokenizer
+└── special_tokens.json        # Shared special tokens
+```
+
+## Benefits
+- **75% storage reduction**: 2.4GB → 600MB
+- **Faster loading**: One model loads all factions
+- **Simpler deployment**: Single model file to manage
+- **Same quality**: Identical responses to copied approach
+
+## Engine Integration
 ```cpp
-#include <onnxruntime_cxx_api.h>
+// Load shared model once
+auto sharedModel = std::make_shared<AIModelResource>("shared_dialogue");
+sharedModel->Load("shared_optimized/dialogue.onnx");
 
-// Initialize ONNX Runtime
-Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "FactionDialogue");
-Ort::SessionOptions session_options;
-session_options.SetIntraOpNumThreads(1);
+// Load faction configurations
+class FactionConfig {
+    std::string promptTemplate;
+    std::vector<std::string> personality_traits;
+    std::vector<std::string> key_vocabulary;
+};
 
-// For GPU acceleration (optional)
-// OrtCUDAProviderOptions cuda_options{};
-// session_options.AppendExecutionProvider_CUDA(cuda_options);
+std::map<std::string, FactionConfig> factionConfigs;
+// Load each faction_config.json...
 
-// Load model
-Ort::Session session(env, L"faction_dialogue_model_optimized.onnx", session_options);
+// Generate dialogue for any faction
+std::string generateDialogue(const std::string& faction, const std::string& input) {
+    auto& config = factionConfigs[faction];
+    std::string prompt = formatPrompt(config.promptTemplate, input);
+    return sharedModel->generateResponse(prompt);
+}
 ```
 
-## Input Format
-- Input IDs: int64 tensor [batch_size, sequence_length]
-- Attention Mask: int64 tensor [batch_size, sequence_length]
+## Faction Prompt Templates
+- **Ashvattha**: `[ASHVATTHA] Player: {input} Assistant:`
+- **Vaikuntha**: `[VAIKUNTHA] Player: {input} Assistant:`
+- **Yuga Striders**: `[YUGA_STRIDERS] Player: {input} Assistant:`
+- **Shroud Mantra**: `[SHROUD_MANTRA] Player: {input} Assistant:`
 
-## Faction Prompt Format
-```
-[ASHVATTHA] Player: What is karma? Assistant:
-[VAIKUNTHA] Player: Can karma be measured? Assistant:
-[YUGA_STRIDERS] Player: How do we break free? Assistant:
-[SHROUD_MANTRA] Player: Is reality just a story? Assistant:
-```
-
-## Generation Parameters
-- Max new tokens: 80
-- Temperature: 0.7
-- Top-p: 0.9
-- Repetition penalty: 1.05
-
-## Performance Targets
-- Inference time: <100ms on RTX 5070 Ti
-- Memory usage: ~500MB for model
-- Batch size: 1 for real-time dialogue
-
-## Model Outputs
-- Logits: float tensor [batch_size, sequence_length, vocab_size]
-- Use argmax or sampling for next token prediction
+## Model Specifications
+- **Input**: `input` (int64 tensor, shape: [1, sequence_length])
+- **Output**: `output` (float32 tensor, shape: [1, sequence_length, 50257])
+- **Single model serves all factions through prompt conditioning**
+- **Training loss**: 0.0193 (excellent dialogue quality)
 """
+    
+        with open(guide_path, 'w') as f:
+            f.write(guide_content)
         
-        with open(cpp_guide_path, 'w') as f:
-            f.write(cpp_guide)
-        
-        print(f"   📄 C++ integration guide saved: {cpp_guide_path}")
-        
-        # Create comprehensive metadata file
-        metadata_path = os.path.join(output_dir, "model_metadata.json")
-        metadata = {
-            'model_info': {
-                'name': 'Faction Dialogue Model',
-                'version': '1.0',
-                'description': 'Philosophical faction dialogue AI for Threads of Kaliyuga',
-                'base_model': 'gpt2',
-                'training_loss': 0.0193,
-                'export_date': '2024-01-01T00:00:00Z'
-            },
-            'model_files': {
-                'onnx_model': 'faction_dialogue_model_optimized.onnx',
-                'tokenizer_vocab': 'tokenizer_vocab.json',
-                'special_tokens': 'special_tokens.json',
-                'faction_mapping': 'faction_mapping.json',
-                'integration_guide': 'cpp_integration_guide.md'
-            },
-            'input_specification': {
-                'input_name': 'input',
-                'input_type': 'int64',
-                'input_shape': [1, 'sequence_length'],
-                'max_sequence_length': 128,
-                'min_sequence_length': 10
-            },
-            'output_specification': {
-                'output_name': 'output',
-                'output_type': 'float32',
-                'output_shape': [1, 'sequence_length', 50257],
-                'vocab_size': 50257
-            },
-            'factions': {
-                'ashvattha': {
-                    'name': 'Ashvattha Collective',
-                    'ideology': 'Ancient wisdom preservationists',
-                    'prompt_prefix': '[ASHVATTHA]',
-                    'key_vocabulary': ['ancient', 'sacred', 'eternal', 'dharma', 'wisdom', 'traditional']
-                },
-                'vaikuntha': {
-                    'name': 'Vaikuntha Initiative',
-                    'ideology': 'Algorithmic karma governance',
-                    'prompt_prefix': '[VAIKUNTHA]',
-                    'key_vocabulary': ['systematic', 'optimal', 'calculated', 'analysis', 'data', 'algorithmic']
-                },
-                'yuga_striders': {
-                    'name': 'Yuga Striders',
-                    'ideology': 'Revolutionary chaos agents',
-                    'prompt_prefix': '[YUGA_STRIDERS]',
-                    'key_vocabulary': ['liberation', 'freedom', 'revolution', 'break', 'chains', 'awakening']
-                },
-                'shroud_mantra': {
-                    'name': 'Shroud of Mantra',
-                    'ideology': 'Reality manipulation masters',
-                    'prompt_prefix': '[SHROUD_MANTRA]',
-                    'key_vocabulary': ['narrative', 'story', 'perspective', 'reality', 'interpretation', 'version']
-                }
-            },
-            'generation_parameters': {
-                'max_new_tokens': 80,
-                'temperature': 0.7,
-                'top_p': 0.9,
-                'repetition_penalty': 1.05,
-                'target_inference_time_ms': 100
-            },
-            'performance_targets': {
-                'inference_time_ms': '<100',
-                'memory_usage_mb': '~500',
-                'target_hardware': 'RTX 5070 Ti',
-                'batch_size': 1
-            },
-            'quality_metrics': {
-                'training_loss': 0.0193,
-                'faction_vocabulary_accuracy': '>90%',
-                'philosophical_depth_score': 'Excellent',
-                'response_coherence': 'High',
-                'template_free_responses': 'Yes'
-            }
-        }
-        
-        with open(metadata_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        
+        print(f"✅ integration_guide.md")
+
+
+
     def _create_integration_files(self, output_dir: str):
+        """Create files needed for C++ integration - FIXED for Angaraka engine"""
+            
+        self._create_optimized_structure()
+
+
+
+    def _create_integration_files1(self, output_dir: str):
         """Create files needed for C++ integration - FIXED for Angaraka engine"""
         
         # Create .meta file for EACH faction model (ENGINE REQUIREMENT)
-        base_model_path = os.path.join(output_dir, "faction_dialogue_model_optimized.onnx")
+        base_model_path = os.path.join(output_dir, "faction_dialogue_model.onnx")
         
         factions = ["ashvattha", "vaikuntha", "yuga_striders", "shroud_mantra"]
         
@@ -530,8 +549,8 @@ auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefau
 std::vector<int64_t> input_shape = {1, static_cast<int64_t>(input_ids.size())};
 
 Ort::Value input_tensor = Ort::Value::CreateTensor<int64_t>(
-    memory_info, input_ids.data(), input_ids.size(), 
-    input_shape.data(), input_shape.size());
+memory_info, input_ids.data(), input_ids.size(), 
+input_shape.data(), input_shape.size());
 
 std::vector<Ort::Value> inputs;
 inputs.push_back(std::move(input_tensor));
@@ -616,7 +635,7 @@ def test_exported_model():
     print("🧪 TESTING EXPORTED ONNX MODEL")
     print("="*40)
     
-    model_path = "models/onnx/faction_dialogue_model_optimized.onnx"
+    model_path = "models/onnx/shared_optimized/dialogue.onnx"
     
     if not os.path.exists(model_path):
         print(f"❌ Model not found: {model_path}")
@@ -625,7 +644,7 @@ def test_exported_model():
     
     try:
         # Load ONNX model
-        ort_session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+        ort_session = ort.InferenceSession(model_path, providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         
         # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained("gpt2")

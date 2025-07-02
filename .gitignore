@@ -199,3 +199,8 @@ cython_debug/
 *.onnx
 *.onnx.meta
 data/synthetic/*/*.json
+special_tokens.json
+tokenizer_vocab.json
+*.xz
+**/*/shared_optimized/*.json
+**/*/shared_optimized/*.md
